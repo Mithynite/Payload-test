@@ -1,320 +1,221 @@
-'use client'
-import { useState } from 'react'
-import { Form } from '@/payload-types'
-import { useContactStore } from './ContactStore'
+import React, { ReactNode, useRef, useState } from 'react'
 
-interface ApplicationFormProps extends Omit<Form, "id" | "updatedAt" | "createdAt">{}
+import { FileText, X, Upload } from 'lucide-react'
 
-export default function ApplicationForm(props:ApplicationFormProps) {
-  // TODO zmapovat jako pole nebo tak, a pak přistupovat k hodnotám dle id
-  type FormField = NonNullable<Form["fields"]>[number]
+import { cn } from '@/lib/utils/cn'
+import { buildFileTypeString, calculateMaxFileSize, mapAcceptableFileTypes } from '@/lib/helpers/file-information-helper'
 
-  function getFieldName(field:FormField):string | null {
-    if("name" in field && field.name && field.name.length > 0) 
-      return field.name
-    return null
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+interface IDropboxProps extends React.HTMLAttributes<HTMLElement> {
+  placeholder?: {
+    emptyPlaceholder?: ReactNode
+    dropingPlaceholder?: ReactNode
+    emptyMobilePlaceholder?: ReactNode
+  }
+  name?: string | undefined
+  maxFileSize: number
+  fileSizeUnits: string
+  mimeTypes: string[]
+  value?: File | null
+  required?: boolean
+  onFileChange?: (file: File | null) => void
+}
+
+export default function Dropbox({
+  className,
+  required = false,
+  placeholder = {
+    dropingPlaceholder: 'Pusťte soubor zde',
+    emptyPlaceholder: 'Přetáhnout nebo vybrat soubor',
+    emptyMobilePlaceholder: 'Vybrat soubor',
+  },
+  name,
+  maxFileSize,
+  fileSizeUnits,
+  mimeTypes,
+  value,
+  onFileChange,
+  ...props
+}: IDropboxProps) {
+
+  const MAX_FILE_SIZE = calculateMaxFileSize(fileSizeUnits, maxFileSize)
+
+  const allowedFileTypes = mapAcceptableFileTypes(mimeTypes)
+  const fileTypeString = buildFileTypeString(mimeTypes)
+
+  const [fileState, setFileState] = useState<File | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const file = value !== undefined ? value : fileState
+
+  const isAcceptableFile = (file: File) => allowedFileTypes.some(t => t === file.type)
+
+  const validateFile = (file: File): boolean => {
+    if (!isAcceptableFile(file)) {
+      setError(`Soubor musí být ve formátu ${fileTypeString}`)
+      return false
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setError(`Soubor nesmí být větší než ${MAX_FILE_SIZE} ${fileSizeUnits}`)
+      return false
+    }
+    setError(null)
+    return true
   }
 
-  const initialFields : Form["fields"] = props.fields ? props.fields : []
-
-  // Mapování objektů
-  const formFields = Object.fromEntries(
-    initialFields.map(f => { 
-      return [f.name, f.defaultValue ?? ""]
-    })
-  )
-
-  const { fields, setField, resetForm } =
-  useContactStore()
-
-  /*const { fullname, email, phoneNumber, comment, file, consent, setField, resetForm } =
-    useContactStore()*/
-
-  const [message, setMessage] = useState<string>('')
-
-    const formFieldsErrors = Object.fromEntries(
-        (initialFields ?? [])
-        .map((field) => {
-          const name = getFieldName(field as FormField)
-          if(!name) return null
-          return [name, ""]
-        }) as [string, string][]
-    )
-
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string | string[]>>({
-    ...formFieldsErrors,
-    formError: '',
-  })
-
-  const formatPhoneNumber = (value: string) => {
-    const cleaned = value.replace(/[^\d+]/g, '')
-    const hasPlus = cleaned.startsWith('+')
-    const digits = hasPlus ? cleaned.slice(1) : cleaned
-
-    const groups = digits.match(/.{1,3}/g)
-    const formattedDigits = groups ? groups.join(' ') : ''
-
-    return hasPlus ? `+${formattedDigits}` : formattedDigits
-  }
-
-  function resetErrors() {
-    const cleared = Object.fromEntries(
-      Object.keys(fieldErrors).map((key) => [key,""])
-    )
-    setFieldErrors({
-        ...cleared,
-        formError:""
-    })
-  }
-
-  async function handleFormAction(formData: FormData) {
-    setIsSubmitting(true)
-    resetErrors()
-    
-    /*try {
-      const result = await $sendApplicationForm({ formData })
-      if (result.success) {
-        resetForm()
-        setMessage('Děkujeme za Váš zájem o pozici ve Wi. Ozveme se Vám co nejdříve.')
-      } else {
-        if (result.fieldErrors) {
-          setFieldErrors(result.fieldErrors)
-        } else {
-          setFieldErrors({
-            ...fieldErrors,
-            formError: 'Něco se pokazilo. Zkuste to prosím znovu.',
-          })
-        }
-        setMessage('')
+  const updateFile = (newFile: File | null) => {
+    if (value === undefined) {
+      setFileState(newFile) // uncontrolled mode
+    }
+    if (inputRef.current) {
+      const dt = new DataTransfer()
+      if (newFile) {
+        dt.items.add(newFile)
       }
-    } catch (error) {
-      setFieldErrors({
-        ...fieldErrors,
-        formError: 'Došlo k chybě. Zkuste to prosím znovu.',
-      })
-    } finally {
-      setIsSubmitting(false)
-    }*/
+      inputRef.current.files = dt.files
+    }
+    onFileChange?.(newFile) // always notify parent
+  }
+
+  const handleFileDrop = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0]
+    if (selectedFile && validateFile(selectedFile)) {
+      updateFile(selectedFile)
+    }
+  }
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDragging(false)
+    if (file) return
+
+    const droppedFile = event.dataTransfer.files?.[0]
+    if (droppedFile && validateFile(droppedFile)) {
+      updateFile(droppedFile)
+    }
+  }
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    if (!file) setIsDragging(true)
+  }
+
+  const handleDragLeave = () => {
+    setIsDragging(false)
+  }
+
+  const handleRemoveFile = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    updateFile(null)
+    if (inputRef.current) {
+      inputRef.current.value = ''
+    }
   }
 
   return (
-    <section
-      id="application-form"
-      className="mx-auto mt-[70px] mb-[50px] flex h-auto max-w-[1340px] scroll-mt-[80px] flex-col items-center gap-[24px] px-[30px] desktop:mt-[100px] desktop:mb-[100px] desktop:scroll-mt-[120px] desktop:gap-[42px]"
-    >
-      <h1>Máte zájem o pozici? Napište nám</h1>
-      {message ? (
-        <div className="mb-[53px] flex flex-col items-center">
-          <h2 className="text-center text-[32px] uppercase desktop:text-[32px] desktop:tracking-[0.1em]">
-            {message}
-          </h2>
-        </div>
-      ) : (
-        <form
-          className="max-w-fit"
-          action={async (formData) => {
-            await handleFormAction(formData)
-          }}
-        >
-          <div className="flex flex-col gap-[24px] desktop:gap-[42px]">
-            {initialFields.length > 0 ? initialFields.map((field) => {
-
-              const name = getFieldName(field as FormField)
-              const required = "required" in field && field.required ? field.required : false
-              const label = "label" in field && field.label ? field.label : ""
-
-              let defaultValue = null;
-              if (
-                field.blockType === "text" ||
-                field.blockType === "email" ||
-                field.blockType === "textarea"
-              ) {
-                defaultValue = "defaultValue" in field && field.defaultValue ? field.defaultValue : ""
-              }
-            
-              if(!name)
-                return null
-
-              return(
-              <div>
-                  <input
-                    value={fields[name]} // state value
-                    onChange={(e) => setField(name, e.target.value)} // differs based on type (phone, text)
-                    name={name}
-                    required = {required}
-                    placeholder={label} // use label
-                    aria-invalid={!!fieldErrors[name]}
-                  />
-                  {fieldErrors[name] && (
-                    <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
-                      {!Array.isArray(fieldErrors[name]) // error state
-                        ? fieldErrors[name]
-                        : fieldErrors[name].map((error) => {
-                            return (
-                              <span
-                                className="text-[12px] text-destructive desktop:text-[20px]"
-                                key={error}
-                              >
-                                {error}
-                              </span>
-                            )
-                          })}
-                    </div>
-                  )}
-                </div>)
-              }) : "Formulář neobsahuje žádná pole."}
-            {/*<div>
-              <input
-                value={fullname}
-                onChange={(e) => setField('fullname', e.target.value)}
-                name="fullname"
-                required
-                placeholder="jméno / příjmení"
-                aria-invalid={!!fieldErrors.fullname}
-              />
-              {fieldErrors.fullname && (
-                <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
-                  {!Array.isArray(fieldErrors.fullname)
-                    ? fieldErrors.fullname
-                    : fieldErrors.fullname.map((error) => {
-                        return (
-                          <span
-                            className="text-[12px] text-destructive desktop:text-[20px]"
-                            key={error}
-                          >
-                            {error}
-                          </span>
-                        )
-                      })}
-                </div>
-              )}
-            </div>*/}
-            {/*<div>
-              <input
-                value={email}
-                onChange={(e) => setField('email', e.target.value)}
-                name="email"
-                required
-                placeholder="e-mail"
-                aria-invalid={!!fieldErrors.email}
-              />
-              {fieldErrors.email && (
-                <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
-                  {!Array.isArray(fieldErrors.email)
-                    ? fieldErrors.email
-                    : fieldErrors.email.map((error) => {
-                        return (
-                          <span
-                            className="text-[12px] text-destructive desktop:text-[20px]"
-                            key={error}
-                          >
-                            {error}
-                          </span>
-                        )
-                      })}
-                </div>
-              )}
-            </div>*/}
-            {/*<div>
-              <input
-                value={phoneNumber}
-                onChange={(e) => setField('phoneNumber', formatPhoneNumber(e.target.value))}
-                name="phonenumber"
-                required
-                placeholder="telefon"
-                aria-invalid={!!fieldErrors.phonenumber}
-              />
-              {fieldErrors.phonenumber && (
-                <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
-                  {!Array.isArray(fieldErrors.phonenumber)
-                    ? fieldErrors.phonenumber
-                    : fieldErrors.phonenumber.map((error) => {
-                        return (
-                          <span
-                            className="text-[12px] text-destructive desktop:text-[20px]"
-                            key={error}
-                          >
-                            {error}
-                          </span>
-                        )
-                      })}
-                </div>
-              )}
-            </div>*/}
-            {/*<div className="desktop:col-span-2">
-              <textarea
-                value={comment}
-                onChange={(e) => setField('comment', e.target.value)}
-                name="comment"
-                placeholder="Komentář"
-                required
-                aria-invalid={!!fieldErrors.comment}
-                className="max-h-[750px] min-h-[55px] desktop:max-h-[1000px] desktop:min-h-[100px]"
-              />
-              {fieldErrors.comment && (
-                <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
-                  {!Array.isArray(fieldErrors.comment)
-                    ? fieldErrors.comment
-                    : fieldErrors.comment.map((error) => {
-                        return (
-                          <span
-                            className="text-[12px] text-destructive desktop:text-[20px]"
-                            key={error}
-                          >
-                            {error}
-                          </span>
-                        )
-                      })}
-                </div>
-              )}
-            </div>*/}
-            {/*<div className="desktop:col-span-2">
-              <Dropbox
-                tabIndex={0}
-                value={file}
-                onFileChange={(f) => setField('file', f)}
-                name="file"
-                required
-                placeholder={{
-                  dropingPlaceholder: 'Pusťte soubor zde',
-                  emptyPlaceholder: 'Přetáhněte nebo vyberte soubor',
-                  emptyMobilePlaceholder: 'Vyberte soubor',
-                }}
-                aria-invalid={!!fieldErrors.file}
-                className="aria-invalid:rounded-b-none"
-              />
-              {fieldErrors.file && (
-                <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
-                  {!Array.isArray(fieldErrors.file)
-                    ? fieldErrors.file
-                    : fieldErrors.file.map((error) => {
-                        return (
-                          <span
-                            className="text-[12px] text-destructive desktop:text-[20px]"
-                            key={error}
-                          >
-                            {error}
-                          </span>
-                        )
-                      })}
-                </div>
-              )}
-            </div>*/}
-          </div>
-          <div className="flex justify-center">
-            <button
-              type="submit"
-              disabled={
-                isSubmitting || Object.values(fields).some(v => !v)
-              }
-              className="desktop:w-[618px] flex flex-row gap-2"
-            >
-              {isSubmitting ? 'Odesílám...' : 'Odeslat'}
-            </button>
-          </div>
-        </form>
+    <div
+      className={cn(
+        'relative transform border-1 px-[30px] py-[30px] text-center transition-all duration-300 ease-in-out focus-within:ring-[3px] focus-within:ring-ring/50',
+        'aria-invalid:ring-destructive-foreground dark:aria-invalid:ring-destructive-foreground aria-invalid:border-destructive-foreground aria-invalid:bg-destructive/40',
+        'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        {
+          'ring-destructive-foreground dark:ring-destructive-foreground border-destructive-foreground bg-destructive/40':
+            error,
+        },
+        isDragging
+          ? 'scale-[1.02] bg-white/10 ring-[2px] ring-primary-foreground backdrop-blur-2xl'
+          : file
+            ? `scale-100`
+            : 'scale-100',
+        file ? 'cursor-default' : 'cursor-pointer',
+        className,
       )}
-    </section>
+      onClick={() => !file && inputRef.current?.click()}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      {...props}
+    >
+      <input
+        name={name}
+        ref={inputRef}
+        type="file"
+        onChange={handleFileDrop}
+        className="hidden"
+        accept="application/pdf"
+      />
+
+      <div
+        className={cn('transition-all duration-300', {
+          'scale-110': isDragging,
+        })}
+      >
+        {!file ? (
+          <>
+            <Upload
+              className={cn(
+                'mb-[10px] inline-flex h-8 w-8 items-center justify-center stroke-1 transition-colors duration-300',
+                {
+                  'stroke-muted': !isDragging,
+                },
+              )}
+            />
+
+            <p className={cn(`transition-colors duration-300 desktop:text-[26px]`)}>
+              {isDragging ? (
+                placeholder.dropingPlaceholder
+              ) : required ? (
+                <>
+                  <span className="hidden text-muted desktop:inline">
+                    {placeholder.emptyPlaceholder + ' *'}
+                  </span>
+                  <span className="text-muted desktop:hidden">
+                    {placeholder.emptyMobilePlaceholder + ' *'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="hidden desktop:inline">{placeholder.emptyPlaceholder}</span>
+                  <span className="desktop:hidden">{placeholder.emptyMobilePlaceholder}</span>
+                </>
+              )}
+            </p>
+            {error && <div className="text-destructive-foreground">{error}</div>}
+          </>
+        ) : (
+          <div className="animate-in duration-300 fade-in-0 slide-in-from-bottom-4">
+            <div className="mx-auto max-w-sm border border-white p-4 shadow-sm transition-colors duration-300 hover:bg-white/10">
+              <div className="flex items-start gap-3">
+                <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 stroke-1 text-white" />
+                <div className="flex min-w-0 flex-1 flex-col items-center">
+                  <p className="max-w-[170px] truncate text-sm font-medium text-white">
+                    {file.name}
+                  </p>
+                  <div className="mt-1 flex items-center justify-center gap-2 text-xs text-white">
+                    <span>{formatFileSize(file.size)}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={handleRemoveFile}
+                  className="hover:text-destructive-foreground rounded-full p-[2px] text-white transition-colors duration-200 outline-none hover:bg-white"
+                  aria-label="Smazat soubor"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
