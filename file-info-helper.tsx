@@ -1,3 +1,4 @@
+type MimeType = `${string}/${string}`;
 
 export const calculateMaxFileSize = (units:string, max:number) => {
     if(units === "MB")
@@ -7,15 +8,19 @@ export const calculateMaxFileSize = (units:string, max:number) => {
     return max
 }
 
-export const mapAcceptableFileTypes = (types:string[]) => {
-    const mappedTypes : Array<string> = Array.from(types.map(t => {
+export const mapAcceptableFileTypes = (types:string[]):MimeType[] => {
+   /* const mappedTypes : Array<string> = Array.from(types.map(t => {
         if(t === "pdf")
             return "application/pdf"
         if(t === "docx")
             return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         return ""
-    }))
-    return mappedTypes
+    }))*/
+    const remappedTypes : Record<string,string> = {
+        pdf: `${"application"}/${"pdf"}`,
+        docx: `${"application"}/${"vnd.openxmlformats-officedocument.wordprocessingml.document"}`
+    }
+    return types.map(t => remappedTypes[t]).filter((v): v is `${string}/${string}` => Boolean(v))
 }
 
 export const buildFileTypeString = (types:string[]) => {
