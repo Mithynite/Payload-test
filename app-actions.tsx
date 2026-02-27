@@ -1,182 +1,128 @@
 'use server'
 
 import config from '@/payload.config'
-import { getPayload } from 'payload'
+import { BasePayload, getPayload } from 'payload'
 import * as v from 'valibot'
-import { Form } from '@/payload-types'
+import { IActionResult } from '../types/IActionResult'
 import { BaseIssue, PipeItem } from 'valibot'
-import { buildFileTypeString, mapAcceptableFileTypes } from '../helpers/file-information-helper'
-
-type FormField = NonNullable<Form["fields"]>[number]
-type MimeType = `${string}/${string}`;
+import { getFieldName, getProperty } from '../helpers/form-fields-helper'
+import { buildFileTypeString, calculateMaxFileSize, mapAcceptableFileTypes } from '../helpers/file-information-helper'
+import { FormField, ValibotSafeMimeType } from '../types/Form-types'
 
 export async function $sendApplicationForm({
   formData,
   initialFields,
+  formId,
 }: {
   formData: FormData,
-  initialFields: FormField[]
-}) {
+  initialFields: FormField[],
+  formId: number,
+}): Promise<IActionResult<undefined>> {
 
-  function getProperty<T extends keyof FormField>(field:FormField, key: T, defaultValue: any){
-    const property = key in field && field[key] ? field : defaultValue
-    return property;
-  }
-
-  const constructFieldSchema = (field : FormField) => {
+  const fieldNamesAndTypes : Record<string,string> = {}
+  
+  const constructFieldValidationSchema = (field : FormField) => {
     const rules : PipeItem<any, string, BaseIssue<unknown>>[] = [];
     let base;
+    
+    const fname = getFieldName(field);
+    const blockType : string = field.blockType;
+    
+    const required : boolean = getProperty(field,"required", false);
+    const label : string = getProperty(field, "label", "");
+    const maxLength : number = getProperty(field, "maxLength", null);
 
-    const fname : (string | null) = "name" in field && field.name ? field.name : null
-
-    const required = getProperty(field, "required", false)
-    const isPhoneNumber = getProperty(field,"isPhoneNumber", false)
-    const label = getProperty(field, "label", "")
-    const maxLength = getProperty(field, "maxLength", null)
-    const fileSize = getProperty(field, "fileSize", null)
-
-    const blockType : string = field.blockType
-    switch (field.blockType) {
+    switch(blockType){
       case "text":
       case "textarea":
         base = v.string()
-          if(isPhoneNumber)
-            break
-          
-          // Required
-          if(required)
-            rules.push(v.nonEmpty(`Vyplňte ${label}`))
-          // Max Length
-          if(maxLength){
-            rules.push(v.maxLength(maxLength, `Zadaná hodnota ${label} je moc dlouhá`))
-          }
-        break
-
-      case "email":
-        base = v.string()
-
+        
         // Required
         if(required)
           rules.push(v.nonEmpty(`Vyplňte ${label}`))
-        // Email
+        // Max Length
+        if(maxLength)
+          rules.push(v.maxLength(maxLength, `Zadaná hodnota ${label} je moc dlouhá`))
+        const isPhoneNumber = getProperty(field,"isPhoneNumber", false)
+      break;
+
+      case "email":
+        base = v.string();
+        // Required
+        if(required)
+          rules.push(v.nonEmpty(`Vyplňte ${label}`))
         rules.push(v.email('E-mail je ve špatném formátu'))
         // Max Length
         if(maxLength)
-          rules.push(
-            v.maxLength(
-            254,
-            'Vaše emailová adresa přesahuje maximální délku emailu podle specifikace RFC 3696',
+          rules.push(v.maxLength(
+            maxLength, 
+            `Vaše emailová adresa přesahuje maximální délku emailu podle specifikace RFC 3696`
           ))
-        break
-      case "checkbox":
-        base = v.boolean()
+      break;
 
+      case "checkbox":
+        base = v.boolean();
         // Required
         if(required)
           rules.push(v.check((input) => input))
-        break
+      break;
 
       case "upload":
         base = v.file('Prosím vyberte soubor')
-        const mimeTypes = getProperty(field,"mimeTypes",[] as MimeType[])
+        const mimeTypes = getProperty(field,"mimeTypes",[] as ValibotSafeMimeType[])
         const acceptableFileTypes = mapAcceptableFileTypes(mimeTypes)
         const fileTypeString = buildFileTypeString(mimeTypes)
 
-        rules.push(v.mimeType(acceptableFileTypes, fileTypeString))
+        rules.push(v.mimeType(acceptableFileTypes, `Soubor musí být ve formátu ${fileTypeString}`))
 
+        const fileSize = getProperty(field, "fileSize", []);
+        const units = fileSize.units;
+        const maxFileSize = fileSize.maxFileSize;
+        const calculatedMaxFileSize = calculateMaxFileSize(units, maxFileSize);
+        rules.push(v.maxSize(calculatedMaxFileSize, `Prosím vyberte soubor menší jak ${maxFileSize}${units}.`),)
+
+      break;
       default:
         return null
     }
 
-    if(fileSize){
-      rules.push(v.maxSize(fileSize.maxSize, `Prosím vyberte soubor menší jak ${fileSize.maxSize} ${fileSize.units}.`))
-    }
+    fieldNamesAndTypes[fname] = blockType
 
     return v.pipe(base, ...rules);
   }
 
-  /** Done */
   const rawFormDataMapped = Object.fromEntries(
     initialFields.map(f => {
-      const fname = f.name
+      const fname = getFieldName(f);
       let value = f.blockType === "checkbox" ? 
         (formData.get(f.name) === "on") : formData.get(fname)
       return [fname, value]
     })
   )
 
-  function buildValidationSchema(rawFormData:Record<string,any>) {
-    let schema = rawFormData.map(data => {
-      return 
+  function buildValidationSchema() {
+    const schema: Record<string,any> = {};
+    initialFields.map(f => {
+      const fname = getFieldName(f);
+      const fieldSchema = constructFieldValidationSchema(f);
+      if(fieldSchema && fname)
+        schema[fname] = fieldSchema
     })
+    return schema;
   }
 
-  const rawFormData = {
-    fullname: formData.get('fullname'),
-    email: formData.get('email'),
-    phonenumber: formData.get('phonenumber'),
-    comment: formData.get('comment'),
-    consent: formData.get('consent') === 'on' ? true : false,
-    file: formData.get('file') as File,
-  }
-
-  /*
-    1) Pre-defined checks (fullname, email, etc.)
-    2) Create schema based on the incoming fields
-    3) Paste it to the v.object({...})
-  */
-
-  const contactSchema = v.object({
-    fullname: v.pipe(
-      v.string(),
-      v.nonEmpty('Vyplňte jméno / příjmení'),
-      v.maxLength(40, 'Vaše jméno / příjmení je moc dlouhé'),
-    ),
-    email: v.pipe(
-      v.string(),
-      v.nonEmpty('Vyplňte e-mail'),
-      v.email('E-mail je ve špatném formátu'),
-      v.maxLength(
-        254,
-        'Vaše emailová adresa přesahuje maximální délku emailu podle specifikace RFC 3696',
-      ),
-    ),
-    phonenumber: v.pipe(v.string()),
-    comment: v.pipe(v.string(), v.nonEmpty('Vyplňte komentář')),
-    consent: v.pipe(
-      v.boolean(),
-      v.check((input) => input), // input must be true
-    ),
-    file: v.pipe(
-      v.file('Prosím vyberte soubor'),
-      v.mimeType(
-        [
-          'application/pdf',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ],
-        'Soubor musí být ve formátu .pdf nebo .docx',
-      ),
-      v.maxSize(1024 * 1024 * 50, 'Prosím vyberte soubor menší jak 50 MB.'),
-    ),
-  })
-
-  const validatedFields = v.safeParse(contactSchema, rawFormData)
-
+  const contactSchemaRemade = v.object(buildValidationSchema())
+  const validatedFields = v.safeParse(contactSchemaRemade, rawFormDataMapped)
+  
   if (!validatedFields.success) {
-    const errors = v.flatten<typeof contactSchema>(validatedFields.issues).nested
-
+    const flatErrors = v.flatten<typeof contactSchemaRemade>(validatedFields.issues);
     return {
       success: false,
-      fieldErrors: errors,
+      fieldErrors: (flatErrors.nested || {}) as Record<string, string[]>,
     }
   }
 
-  try {
-    const payload = await getPayload({ config })
-
-    /** Extract all phone number fields and all file-upload fields to work with them separately */
-    const { phonenumber, file, ...data } = validatedFields.output
-
+  async function resolveFileDataSave(payload: BasePayload, file: any){
     const arrayBuffer = await file.arrayBuffer()
     const fileBuffer = Buffer.from(arrayBuffer)
 
@@ -190,15 +136,40 @@ export async function $sendApplicationForm({
         mimetype: file.type,
       },
     })
+    return fileResult
+  }
+
+  try {
+    const payload = await getPayload({ config });
+    const data = validatedFields.output;
+
+    const submissionDataPromises = Object.entries(data).map(async ([key,value]) => {
+      let blockType = fieldNamesAndTypes[key]           
+      
+      // TODO: Special check for 
+      let finalValue = value;
+      if(blockType === "upload"){
+        const fileResult = await resolveFileDataSave(payload, value);
+        finalValue = fileResult.id;
+      }
+      
+      return({
+        fieldName: key,
+        fieldType: blockType,
+        [`${blockType}Value`]: finalValue
+      })
+    });
+
+    const submissionData = await Promise.all(submissionDataPromises);
 
     const payloadResult = await payload.create({
       collection: 'application-form-messages',
       data: {
-        phoneNumber: phonenumber.replaceAll(' ', ''),
-        file: fileResult.id,
-        ...data,
+        form: formId,
+        submissionData:submissionData
       },
     })
+
   } catch (e: any) {
     console.error(e.cause)
   }
