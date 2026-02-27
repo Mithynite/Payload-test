@@ -1,221 +1,250 @@
-import React, { ReactNode, useRef, useState } from 'react'
+'use client'
+import Button from '../ui/button'
+import { Checkbox } from '../ui/checkbox'
+import Dropbox from '../ui/dropbox'
+import { Input } from '@/components/ui/input'
+import { TextArea } from '../ui/textarea'
+import { useState } from 'react'
+import { SheetTitle } from '../ui/sheet'
+import { useContactStore } from '@/lib/stores/contact-store'
+import { Spinner } from "@/components/ui/spinner"
+import { Form } from '@/payload-types'
+import { $sendApplicationForm } from '@/lib/actions/application-actions'
+import { RichText } from '@payloadcms/richtext-lexical/react'
+import RichTextSerialize from '@/lib/utils/richtext-serialize/richtext-serialize'
+import { getFieldName } from '@/lib/helpers/form-fields-helper'
+import { FormField } from '@/lib/types/Form-types'
 
-import { FileText, X, Upload } from 'lucide-react'
+interface ApplicationFormProps extends Omit<Form, "updatedAt" | "createdAt">{}
 
-import { cn } from '@/lib/utils/cn'
-import { buildFileTypeString, calculateMaxFileSize, mapAcceptableFileTypes } from '@/lib/helpers/file-information-helper'
+function ApplicationForm(props:ApplicationFormProps) {
+  const submitButtonLabel = props.submitButtonLabel ?? ""
+  const initialFields : FormField[] = props.fields ? props.fields : []
 
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 Bytes'
-  const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
+  const confirmationMessage = props.confirmationMessage;
+  const formId = props.id
 
-interface IDropboxProps extends React.HTMLAttributes<HTMLElement> {
-  placeholder?: {
-    emptyPlaceholder?: ReactNode
-    dropingPlaceholder?: ReactNode
-    emptyMobilePlaceholder?: ReactNode
-  }
-  name?: string | undefined
-  maxFileSize: number
-  fileSizeUnits: string
-  mimeTypes: string[]
-  value?: File | null
-  required?: boolean
-  onFileChange?: (file: File | null) => void
-}
+  const formFieldErrors = Object.fromEntries(
+    initialFields.map(f => {
+      const name = getFieldName(f as FormField)
+      if(!name)
+        return []
+      return [name, ""]
+    })
+  )
 
-export default function Dropbox({
-  className,
-  required = false,
-  placeholder = {
-    dropingPlaceholder: 'Pusťte soubor zde',
-    emptyPlaceholder: 'Přetáhnout nebo vybrat soubor',
-    emptyMobilePlaceholder: 'Vybrat soubor',
-  },
-  name,
-  maxFileSize,
-  fileSizeUnits,
-  mimeTypes,
-  value,
-  onFileChange,
-  ...props
-}: IDropboxProps) {
+  const { fields, setField, resetForm } =
+  useContactStore()
 
-  const MAX_FILE_SIZE = calculateMaxFileSize(fileSizeUnits, maxFileSize)
+  // TODO: add Richtext option
+  const [message, setMessage] = useState<string>("")
 
-  const allowedFileTypes = mapAcceptableFileTypes(mimeTypes)
-  const fileTypeString = buildFileTypeString(mimeTypes)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string | string[]>>({
+    ...formFieldErrors,
+    position: '',
+    formError: '',
+  })
 
-  const [fileState, setFileState] = useState<File | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [isDragging, setIsDragging] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const formatPhoneNumber = (value: string) => {
+    const cleaned = value.replace(/[^\d+]/g, '')
+    const hasPlus = cleaned.startsWith('+')
+    const digits = hasPlus ? cleaned.slice(1) : cleaned
 
-  const file = value !== undefined ? value : fileState
+    const groups = digits.match(/.{1,3}/g)
+    const formattedDigits = groups ? groups.join(' ') : ''
 
-  const isAcceptableFile = (file: File) => allowedFileTypes.some(t => t === file.type)
-
-  const validateFile = (file: File): boolean => {
-    if (!isAcceptableFile(file)) {
-      setError(`Soubor musí být ve formátu ${fileTypeString}`)
-      return false
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      setError(`Soubor nesmí být větší než ${MAX_FILE_SIZE} ${fileSizeUnits}`)
-      return false
-    }
-    setError(null)
-    return true
+    return hasPlus ? `+${formattedDigits}` : formattedDigits
   }
 
-  const updateFile = (newFile: File | null) => {
-    if (value === undefined) {
-      setFileState(newFile) // uncontrolled mode
-    }
-    if (inputRef.current) {
-      const dt = new DataTransfer()
-      if (newFile) {
-        dt.items.add(newFile)
+  async function handleFormAction(formData: FormData) {
+    setIsSubmitting(true)
+    // reset errors
+    setFieldErrors({
+      ...formFieldErrors,
+      position: '',
+      formError: '',
+    })
+
+    try {
+      const result = await $sendApplicationForm({ formData, initialFields, formId })
+      if (result.success) {
+        resetForm()
+        setMessage("Děkujeme za Váš zájem o pozici ve Wi. Ozveme se Vám co nejdříve.")
+      } else {
+        if (result.fieldErrors) {
+          setFieldErrors(result.fieldErrors)
+        } else {
+          setFieldErrors({
+            ...fieldErrors,
+            formError: 'Něco se pokazilo. Zkuste to prosím znovu.',
+          })
+        }
+        setMessage('')
       }
-      inputRef.current.files = dt.files
-    }
-    onFileChange?.(newFile) // always notify parent
-  }
-
-  const handleFileDrop = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = event.target.files?.[0]
-    if (selectedFile && validateFile(selectedFile)) {
-      updateFile(selectedFile)
+    } catch (error) {
+      setFieldErrors({
+        ...fieldErrors,
+        formError: 'Došlo k chybě. Zkuste to prosím znovu.',
+      })
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    setIsDragging(false)
-    if (file) return
+  function chooseFormInput(field : FormField){
+    const blockType = field.blockType
+    const fname = getFieldName(field)
+    const required = "required" in field && field.required ? field.required : false
+    const label = "label" in field && field.label ? field.label : ""
 
-    const droppedFile = event.dataTransfer.files?.[0]
-    if (droppedFile && validateFile(droppedFile)) {
-      updateFile(droppedFile)
+    const enhancedLabel = "enhancedLabel" in field && field.enhancedLabel ? field.enhancedLabel : null
+
+    if(!fname)
+      return null
+
+    let onChangeFunction;
+    if(blockType === "text" && field.isPhoneNumber){
+      onChangeFunction = (e:any) => setField(fname, formatPhoneNumber(e.target.value))
+    }else if (blockType === "checkbox"){
+      onChangeFunction = (val:any) => setField(fname, !!val)
+    }else if(blockType === "upload") {
+      onChangeFunction = (f:any) => setField(fname, f)
+    }else{
+      onChangeFunction = (e:any) => setField(fname, e.target.value)
+    }
+
+    switch(blockType){
+      case "textarea":
+        return(
+          <TextArea
+            value={fields[fname]}
+            onChange={onChangeFunction}
+            name={fname}
+            required={required}
+            placeholder={label}
+            aria-invalid={!!fieldErrors[fname]}
+            className="max-h-[750px] min-h-[55px] desktop:max-h-[1000px] desktop:min-h-[100px]"
+        />)
+      case "checkbox":
+        return(
+        <div className="mt-[20px] mb-[60px] flex items-center justify-center gap-[15px] text-[16px]">
+          <Checkbox
+            checked={fields[fname]} //|| isSubmitting}
+            onCheckedChange={onChangeFunction}
+            name={fname}
+            id={fname}
+          />
+          {enhancedLabel ? 
+            <label htmlFor={fname} className="hover:cursor-pointer">
+              <span>
+                {RichTextSerialize(enhancedLabel)}
+              </span>
+            </label>
+            : 
+            <label htmlFor={fname} className="hover:cursor-pointer">
+              <span>
+                {label}
+              </span>
+            </label>
+          }
+        </div>)
+      case "upload":
+        return(
+          <Dropbox
+            tabIndex={0}
+            value={fields[fname]}
+            onFileChange={onChangeFunction}
+            name={fname}
+            required={required}
+            placeholder={{
+              ...field.placeholders
+            }}
+            maxFileSize={field.fileSize.maxSize}
+            fileSizeUnits={field.fileSize.units}
+            mimeTypes={field.mimeTypes ?? []}
+            aria-invalid={!!fieldErrors[fname]}
+            className="aria-invalid:rounded-b-none"
+        />)
+      default:
+        return(
+          <Input
+            value={fields[fname]}
+            onChange={onChangeFunction}
+            name={fname}
+            required={required}
+            placeholder={label}
+            aria-invalid={!!fieldErrors[fname]}
+        />)
     }
   }
 
-  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    if (!file) setIsDragging(true)
-  }
-
-  const handleDragLeave = () => {
-    setIsDragging(false)
-  }
-
-  const handleRemoveFile = (event: React.MouseEvent) => {
-    event.stopPropagation()
-    updateFile(null)
-    if (inputRef.current) {
-      inputRef.current.value = ''
-    }
-  }
+  console.log(fields)
 
   return (
-    <div
-      className={cn(
-        'relative transform border-1 px-[30px] py-[30px] text-center transition-all duration-300 ease-in-out focus-within:ring-[3px] focus-within:ring-ring/50',
-        'aria-invalid:ring-destructive-foreground dark:aria-invalid:ring-destructive-foreground aria-invalid:border-destructive-foreground aria-invalid:bg-destructive/40',
-        'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
-        {
-          'ring-destructive-foreground dark:ring-destructive-foreground border-destructive-foreground bg-destructive/40':
-            error,
-        },
-        isDragging
-          ? 'scale-[1.02] bg-white/10 ring-[2px] ring-primary-foreground backdrop-blur-2xl'
-          : file
-            ? `scale-100`
-            : 'scale-100',
-        file ? 'cursor-default' : 'cursor-pointer',
-        className,
-      )}
-      onClick={() => !file && inputRef.current?.click()}
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      {...props}
+    <section
+      id="application-form"
+      className="mx-auto mt-[70px] mb-[50px] flex h-auto max-w-[1340px] scroll-mt-[80px] flex-col items-center gap-[24px] px-[30px] desktop:mt-[100px] desktop:mb-[100px] desktop:scroll-mt-[120px] desktop:gap-[42px]"
     >
-      <input
-        name={name}
-        ref={inputRef}
-        type="file"
-        onChange={handleFileDrop}
-        className="hidden"
-        accept="application/pdf"
-      />
-
-      <div
-        className={cn('transition-all duration-300', {
-          'scale-110': isDragging,
-        })}
-      >
-        {!file ? (
-          <>
-            <Upload
-              className={cn(
-                'mb-[10px] inline-flex h-8 w-8 items-center justify-center stroke-1 transition-colors duration-300',
-                {
-                  'stroke-muted': !isDragging,
-                },
-              )}
-            />
-
-            <p className={cn(`transition-colors duration-300 desktop:text-[26px]`)}>
-              {isDragging ? (
-                placeholder.dropingPlaceholder
-              ) : required ? (
-                <>
-                  <span className="hidden text-muted desktop:inline">
-                    {placeholder.emptyPlaceholder + ' *'}
-                  </span>
-                  <span className="text-muted desktop:hidden">
-                    {placeholder.emptyMobilePlaceholder + ' *'}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="hidden desktop:inline">{placeholder.emptyPlaceholder}</span>
-                  <span className="desktop:hidden">{placeholder.emptyMobilePlaceholder}</span>
-                </>
-              )}
-            </p>
-            {error && <div className="text-destructive-foreground">{error}</div>}
-          </>
-        ) : (
-          <div className="animate-in duration-300 fade-in-0 slide-in-from-bottom-4">
-            <div className="mx-auto max-w-sm border border-white p-4 shadow-sm transition-colors duration-300 hover:bg-white/10">
-              <div className="flex items-start gap-3">
-                <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 stroke-1 text-white" />
-                <div className="flex min-w-0 flex-1 flex-col items-center">
-                  <p className="max-w-[170px] truncate text-sm font-medium text-white">
-                    {file.name}
-                  </p>
-                  <div className="mt-1 flex items-center justify-center gap-2 text-xs text-white">
-                    <span>{formatFileSize(file.size)}</span>
+      <SheetTitle>Máte zájem o pozici? Napište nám.</SheetTitle>
+      {message ? (
+        <div className="mb-[53px] flex flex-col items-center">
+          <h2 className="text-center text-[32px] uppercase desktop:text-[32px] desktop:tracking-[0.1em]">
+            {message}
+          </h2>
+        </div>
+      ) : (
+        <form
+          className="max-w-fit"
+          action={async (formData) => {
+            await handleFormAction(formData)
+          }}
+        >
+          <div className="flex flex-col gap-[24px] desktop:gap-[42px]">
+            {initialFields.length > 0 ? initialFields.map(((field : FormField, index:number) => {
+              const fname = getFieldName(field)
+              const blockType = field.blockType
+          
+              if(!fname)
+                return null
+              
+              return(
+                <div key={index}>
+                    {chooseFormInput(field)}
+                    {blockType != "checkbox" ? fieldErrors[fname] && (
+                      <div className="bg-destructive-foreground flex w-full flex-col gap-[2px] rounded-b-[4px] px-[4px] py-[6px] text-sm">
+                        {!Array.isArray(fieldErrors[fname])
+                          ? fieldErrors[fname]
+                          : fieldErrors[fname].map((error) => {
+                              return (
+                                <span
+                                  className="text-[12px] text-destructive desktop:text-[20px]"
+                                  key={error}
+                                >
+                                  {error}
+                                </span>
+                              )
+                            })}
+                      </div>
+                    ): null}
                   </div>
-                </div>
-                <button
-                  onClick={handleRemoveFile}
-                  className="hover:text-destructive-foreground rounded-full p-[2px] text-white transition-colors duration-200 outline-none hover:bg-white"
-                  aria-label="Smazat soubor"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+                )
+              })) : "Formulář neobsahuje žádná pole."}
           </div>
-        )}
-      </div>
-    </div>
+          <div className="flex justify-center">
+            <Button
+              type="submit"
+              disabled={ isSubmitting || Object.values(fields).some(v => !v) }
+              className="desktop:w-[618px] flex flex-row gap-2"
+            >
+              {isSubmitting && !Object.values(fields).some(v => !v) ? <Spinner className="size-6"/> : null}
+              {isSubmitting ? 'Odesílám...' : submitButtonLabel}
+            </Button>
+          </div>
+        </form>
+      )}
+    </section>
   )
 }
+
+export default ApplicationForm
