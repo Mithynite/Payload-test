@@ -1,44 +1,25 @@
 import { create } from 'zustand'
 
-/*interface ContactState {
-  fullname: string
-  email: string
-  phoneNumber: string
-  comment: string
-  file: File | null
-  consent: boolean
-  setField: (field: string, value: any) => void
-  resetForm: () => void
-}*/
-
-// TODO přidat dynamicky další fieldy, defaultně tu byly fullname, email atd. ale je třeba sem dát jen
-// 
 interface ContactState {
-  fields: Record<string, any>,
-  //file: File | null,
-  //consent: boolean,
-  initializeFields:(fields: Record<string,any>) => void,
-  setField: (field: string, value: any) => void,
-  //setFileField:(field:string, value:any) => void,
+  fields: Record<string, {value:any, required:boolean}>,
+  initializeFields:(fields: Record<string, {value:any, required:boolean}>) => void,
+  setField: (field: string, value: any, required: boolean) => void,
   resetForm: () => void,
 }
 
 export const useContactStore = create<ContactState>((set) => ({
   fields: {},
-  //file: null,
   initializeFields:(incomingFields) => set({
     fields:incomingFields,
   }),
-  setField: (field, value) => set((state) => ({ ...state, 
+  setField: (field, value, required) => set((state) => ({ //...state, 
     fields:{
-      ...state, 
-      [field]: value
+      ...state.fields, 
+      [field]: {value:value, required:required}
     }
   })),
-  //setFileField:(field, value) => set((state) => ({...state, [field]:value})),
   resetForm:() =>
     set({
       fields:{},
-      //file: null,
     }),
 }))
